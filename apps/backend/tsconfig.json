@@ -1,0 +1,16 @@
+{
+    "compilerOptions": {
+        "target": "ES2024",
+        "module": "CommonJS",
+        "strictNullChecks": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true,
+        "emitDecoratorMetadata": true,
+        "experimentalDecorators": true,
+        "declaration": true,
+        "outDir": "dist",
+    },
+    "include": ["src", "migrations"],
+    "exclude": ["node_modules", "**/*.spec.ts"]
+}
