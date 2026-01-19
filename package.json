@@ -1,0 +1,33 @@
+{
+  "name": "stay-coti",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "yarn@4.6.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:backend": "turbo run dev --filter=@coti-community/backend",
+    "dev:frontend": "turbo run dev --filter=@coti-community/frontend",
+    "build": "turbo run build",
+    "build:backend": "turbo run build --filter=@coti-community/backend",
+    "build:frontend": "turbo run build --filter=@coti-community/frontend",
+    "start": "turbo run start",
+    "start:backend": "turbo run start --filter=@coti-community/backend",
+    "start:frontend": "turbo run start --filter=@coti-community/frontend",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.5",
+    "turbo": "^2.3.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

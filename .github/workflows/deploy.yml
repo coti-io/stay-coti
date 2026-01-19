@@ -1,0 +1,228 @@
+# ================================
+# COTI Community Platform - Deploy Pipeline
+# Builds and deploys to GCP on push to main/develop
+# ================================
+
+name: Deploy
+
+on:
+  push:
+    branches: [main, develop]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGION: ${{ secrets.REGION }}
+  GCP_REGISTRY: ${{ secrets.GCP_REGISTRY }}
+  GCP_REPO: ${{ secrets.GCP_REPO }}
+
+jobs:
+  # ================================
+  # Determine what changed
+  # ================================
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-22.04
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'apps/backend/**'
+              - 'packages/shared/**'
+            frontend:
+              - 'apps/frontend/**'
+              - 'packages/shared/**'
+
+  # ================================
+  # Build and Push Backend Docker Image
+  # ================================
+  build-backend:
+    name: Build Backend
+    runs-on: ubuntu-22.04
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for GCP
+        run: gcloud auth configure-docker ${{ env.GCP_REGISTRY }} --quiet
+
+      - name: Set environment file
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "${{ secrets.BACKEND_ENV_PROD }}" > apps/backend/.env
+          else
+            echo "${{ secrets.BACKEND_ENV_DEV }}" > apps/backend/.env
+          fi
+
+      - name: Build Docker image
+        working-directory: apps/backend
+        run: |
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          docker build \
+            -t ${{ env.GCP_REGISTRY }}/${{ env.GCP_REPO }}/coti-backend:${BRANCH_NAME}-${{ github.sha }} \
+            -t ${{ env.GCP_REGISTRY }}/${{ env.GCP_REPO }}/coti-backend:${BRANCH_NAME}-latest \
+            .
+
+      - name: Push Docker image
+        run: |
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          docker push ${{ env.GCP_REGISTRY }}/${{ env.GCP_REPO }}/coti-backend:${BRANCH_NAME}-${{ github.sha }}
+          docker push ${{ env.GCP_REGISTRY }}/${{ env.GCP_REPO }}/coti-backend:${BRANCH_NAME}-latest
+
+  # ================================
+  # Build and Push Frontend Docker Image
+  # ================================
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-22.04
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for GCP
+        run: gcloud auth configure-docker ${{ env.GCP_REGISTRY }} --quiet
+
+      - name: Set environment file
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "${{ secrets.FRONTEND_ENV_PROD }}" > apps/frontend/.env
+          else
+            echo "${{ secrets.FRONTEND_ENV_DEV }}" > apps/frontend/.env
+          fi
+
+      - name: Build Docker image
+        working-directory: apps/frontend
+        run: |
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          docker build \
+            -t ${{ env.GCP_REGISTRY }}/${{ env.GCP_REPO }}/coti-frontend:${BRANCH_NAME}-${{ github.sha }} \
+            -t ${{ env.GCP_REGISTRY }}/${{ env.GCP_REPO }}/coti-frontend:${BRANCH_NAME}-latest \
+            .
+
+      - name: Push Docker image
+        run: |
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          docker push ${{ env.GCP_REGISTRY }}/${{ env.GCP_REPO }}/coti-frontend:${BRANCH_NAME}-${{ github.sha }}
+          docker push ${{ env.GCP_REGISTRY }}/${{ env.GCP_REPO }}/coti-frontend:${BRANCH_NAME}-latest
+
+  # ================================
+  # Deploy Backend
+  # ================================
+  deploy-backend:
+    name: Deploy Backend
+    runs-on: ubuntu-22.04
+    needs: build-backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "${{ secrets.SSH_PRIVATE_KEY_PROD }}" > ~/.ssh/id_rsa
+            SSH_HOST="${{ secrets.SSH_HOST_PROD }}"
+            SSH_USER="${{ secrets.SSH_USER_PROD }}"
+          else
+            echo "${{ secrets.SSH_PRIVATE_KEY_DEV }}" > ~/.ssh/id_rsa
+            SSH_HOST="${{ secrets.SSH_HOST_DEV }}"
+            SSH_USER="${{ secrets.SSH_USER_DEV }}"
+          fi
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            SSH_HOST="${{ secrets.SSH_HOST_PROD }}"
+            SSH_USER="${{ secrets.SSH_USER_PROD }}"
+          else
+            SSH_HOST="${{ secrets.SSH_HOST_DEV }}"
+            SSH_USER="${{ secrets.SSH_USER_DEV }}"
+          fi
+          ssh $SSH_USER@$SSH_HOST "./run_be.sh"
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -rf ~/.ssh
+
+  # ================================
+  # Deploy Frontend
+  # ================================
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-22.04
+    needs: build-frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "${{ secrets.SSH_PRIVATE_KEY_PROD }}" > ~/.ssh/id_rsa
+            SSH_HOST="${{ secrets.SSH_HOST_PROD }}"
+            SSH_USER="${{ secrets.SSH_USER_PROD }}"
+          else
+            echo "${{ secrets.SSH_PRIVATE_KEY_DEV }}" > ~/.ssh/id_rsa
+            SSH_HOST="${{ secrets.SSH_HOST_DEV }}"
+            SSH_USER="${{ secrets.SSH_USER_DEV }}"
+          fi
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            SSH_HOST="${{ secrets.SSH_HOST_PROD }}"
+            SSH_USER="${{ secrets.SSH_USER_PROD }}"
+          else
+            SSH_HOST="${{ secrets.SSH_HOST_DEV }}"
+            SSH_USER="${{ secrets.SSH_USER_DEV }}"
+          fi
+          ssh $SSH_USER@$SSH_HOST "./run_fe.sh"
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -rf ~/.ssh

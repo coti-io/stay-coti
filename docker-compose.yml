@@ -1,0 +1,131 @@
+# ================================
+# COTI Community Platform
+# Docker Compose for Local Development
+# ================================
+
+services:
+  # ================================
+  # Backend API Service
+  # ================================
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    container_name: coti-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - MASTER_DB={"host":"mysql","port":3306,"username":"root","password":"coti_password","database":"coti_community"}
+      - SLAVES_DB=[{"host":"mysql","port":3306,"username":"root","password":"coti_password","database":"coti_community"}]
+      - REDIS={"host":"redis","port":6379}
+    env_file:
+      - ./apps/backend/.env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - coti-network
+    volumes:
+      - ./apps/backend/src:/app/src:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ================================
+  # Frontend Web Service
+  # ================================
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+    container_name: coti-frontend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:3000
+    env_file:
+      - ./apps/frontend/.env
+    depends_on:
+      - backend
+    networks:
+      - coti-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ================================
+  # MySQL Database
+  # ================================
+  mysql:
+    image: mysql:8.0
+    container_name: coti-mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=coti_password
+      - MYSQL_DATABASE=coti_community
+      - MYSQL_USER=coti_user
+      - MYSQL_PASSWORD=coti_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - coti-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pcoti_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command: --default-authentication-plugin=mysql_native_password
+
+  # ================================
+  # Redis Cache
+  # ================================
+  redis:
+    image: redis:7-alpine
+    container_name: coti-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - coti-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    command: redis-server --appendonly yes
+
+# ================================
+# Networks
+# ================================
+networks:
+  coti-network:
+    driver: bridge
+
+# ================================
+# Volumes
+# ================================
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
